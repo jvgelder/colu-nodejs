@@ -141,6 +141,69 @@ Colu.prototype.signAndTransmit = function (assetInfo, attempts, callback) {
   )
 }
 
+Colu.prototype.signAndTransmitWithKey = function (assetInfo,privkey, attempts, callback) {
+  var self = this
+  if (typeof attempts == 'function') {
+    callback = attempts
+    attempts = 0
+  }
+  if (!privkey){
+	return callback('Privkey required')
+  }
+  if (attempts >= 10) {
+    return callback('Cannot transmit the transaction')
+  }
+  if (attempts) {
+    console.log('trying to transmit for the ' + (attempts + 1) + ' attempts')
+  }
+  var txHex = assetInfo.txHex
+  var lastTxid = assetInfo.financeTxid
+  var addresses = ColoredCoins.getInputAddresses(txHex, self.network)
+  async.map(addresses,
+  function (address, cb) {
+		return cb(null, privkey)
+    },
+    function (err, privkey) {
+      if (err) return callback(err)
+      var signedTxHex = ColoredCoins.signTx(txHex, privkey)
+      self.transmit(signedTxHex, lastTxid, function (err, resp) {
+        if (err) {
+          if (!err.assetInfo) return callback(err)
+          // try fallback:
+          return self.signAndTransmit(err.assetInfo, attempts + 1, callback)
+        }
+        assetInfo.txid = resp.txid2.txid
+        callback(null, assetInfo)
+      })
+    }
+  )
+}
+Colu.prototype.sendAssetWithPriv = function (args,privkey, callback) {
+  var self = this
+  
+  async.waterfall([
+    // Build finance transaction.
+    function (cb) {
+      if ((!args.from || !Array.isArray(args.from) || !args.from.length) && (!args.sendutxo || !Array.isArray(args.sendutxo) || !args.sendutxo.length)) {
+        return cb('Should have from as array of addresses or sendutxo as array of utxos.')
+      }
+      if (!(privkey)){
+        return cb('Should send a privkey with this function')  
+      }
+      args.flags = args.flags || {}
+      args.flags.injectPreviousOutput = true
+      self.buildTransaction('send', args, cb)
+    },
+    function (assetInfo, cb) {
+      self.signAndTransmitWithKey(assetInfo,privkey, cb)
+    },
+    function (assetInfo, cb) {
+      cb(null, assetInfo)
+    }
+  ],
+  callback)
+}
+
 Colu.prototype.transmit = function (signedTxHex, lastTxid, callback) {
   var dataParams = {
     last_txid: lastTxid,
